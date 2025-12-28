@@ -1,4 +1,16 @@
 <!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <meta charset="UTF-8">
+    <title>iframe tester</title>
+    <link rel="stylesheet" href="https://public.codepenassets.com/css/reset-2.0.min.css">
+
+
+  </head>
+    
+  <body>
+  <!DOCTYPE html>
 <html lang="id" dir="ltr">
 <head>
     <meta charset="UTF-8">
@@ -763,14 +775,11 @@
             volume: 0.8,
             isMuted: false,
             isLoading: false,
-            isReady: false
+            pendingPlay: false  // Flag untuk pending play setelah load
         };
         
-        // DOM Elements - akan diisi setelah DOM ready
-        let elements = {};
-        
         // ============================================
-        // HELPER: Safe DOM access
+        // HELPER FUNCTIONS
         // ============================================
         function $(id) {
             return document.getElementById(id);
@@ -805,37 +814,27 @@
         // INITIALIZATION
         // ============================================
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM Ready');
             initApp();
         });
         
         async function initApp() {
             try {
-                // Set cover image
                 const coverArt = $('coverArt');
                 if (coverArt) coverArt.src = QARI_IMAGE;
                 
-                // Set audio volume
                 const audioPlayer = $('audioPlayer');
                 if (audioPlayer) {
                     audioPlayer.volume = state.volume;
                     setupAudioEvents();
                 }
                 
-                // Load surahs
                 await loadSurahs();
                 
-                // Load first surah
                 if (state.surahs.length > 0) {
-                    await loadSurah(1);
+                    await loadSurah(1, false); // false = jangan auto-play
                 }
                 
-                state.isReady = true;
-                
-                // Hide loading
                 addClass('loadingOverlay', 'hidden');
-                
-                console.log('App initialized successfully');
                 
             } catch (error) {
                 console.error('Init error:', error);
@@ -853,52 +852,55 @@
                 if (!response.ok) throw new Error('Network error');
                 const data = await response.json();
                 state.surahs = data.data || [];
-                console.log('Loaded', state.surahs.length, 'surahs');
             } catch (error) {
                 console.error('Error loading surahs:', error);
                 showToast('Gagal memuat daftar surah', 'error');
             }
         }
         
-        async function loadSurah(surahNumber) {
+        // FIXED: Tambah parameter autoPlay
+        async function loadSurah(surahNumber, autoPlay = false) {
             if (state.isLoading) {
-                console.log('Already loading...');
                 return false;
             }
             
             // Check cache first
             if (state.surahCache[surahNumber]) {
-                console.log('Using cached surah:', surahNumber);
                 state.currentSurah = state.surahCache[surahNumber];
                 state.ayahs = state.currentSurah.verses || [];
                 state.currentAyah = 1;
                 updateUI();
                 prepareAudio();
+                
+                // FIXED: Auto-play jika diminta
+                if (autoPlay) {
+                    playAudio();
+                }
                 return true;
             }
             
             state.isLoading = true;
-            console.log('Loading surah:', surahNumber);
+            state.pendingPlay = autoPlay; // Simpan flag untuk play setelah load
             
             try {
                 const response = await fetch(`${API_BASE}/surah/${surahNumber}`);
                 if (!response.ok) throw new Error('Network error');
                 
                 const data = await response.json();
-                
                 if (!data.data) throw new Error('Invalid data');
                 
-                // Cache it
                 state.surahCache[surahNumber] = data.data;
-                
                 state.currentSurah = data.data;
                 state.ayahs = data.data.verses || [];
                 state.currentAyah = 1;
                 
-                console.log('Loaded surah:', state.currentSurah.name.transliteration.id);
-                
                 updateUI();
                 prepareAudio();
+                
+                // FIXED: Auto-play jika diminta
+                if (state.pendingPlay) {
+                    playAudio();
+                }
                 
                 return true;
                 
@@ -909,6 +911,7 @@
                 
             } finally {
                 state.isLoading = false;
+                state.pendingPlay = false;
             }
         }
         
@@ -916,31 +919,21 @@
         // UI UPDATE
         // ============================================
         function updateUI() {
-            if (!state.currentSurah) {
-                console.log('No current surah');
-                return;
-            }
+            if (!state.currentSurah) return;
             
-            // Update surah info
             setText('surahName', state.currentSurah.name.transliteration.id);
             setText('surahArabic', state.currentSurah.name.short);
             setText('currentAyahNum', state.currentAyah);
             setText('totalAyah', state.currentSurah.numberOfVerses);
             
-            // Update running text
             updateRunningText();
         }
         
         function updateRunningText() {
-            if (!state.currentSurah || !state.ayahs || state.ayahs.length === 0) {
-                return;
-            }
+            if (!state.currentSurah || !state.ayahs || state.ayahs.length === 0) return;
             
             const ayahData = state.ayahs[state.currentAyah - 1];
-            if (!ayahData) {
-                console.log('No ayah data for:', state.currentAyah);
-                return;
-            }
+            if (!ayahData) return;
             
             setText('runningArabic', ayahData.text.arab);
             setText('runningTranslation', ayahData.translation.id);
@@ -980,7 +973,31 @@
             if (audioPlayer) {
                 audioPlayer.src = audioUrl;
                 audioPlayer.load();
-                console.log('Audio prepared:', audioUrl);
+            }
+        }
+        
+        // FIXED: Fungsi khusus untuk play audio
+        function playAudio() {
+            const audioPlayer = $('audioPlayer');
+            if (!audioPlayer) return;
+            
+            // Pastikan ada source
+            if (!audioPlayer.src || audioPlayer.src === location.href) {
+                if (state.mode === 'radio') {
+                    audioPlayer.src = RADIO_URL;
+                } else {
+                    prepareAudio();
+                }
+            }
+            
+            const playPromise = audioPlayer.play();
+            if (playPromise !== undefined) {
+                playPromise.then(function() {
+                    state.isPlaying = true;
+                    updateAnimations();
+                }).catch(function(error) {
+                    console.log('Play error:', error.message);
+                });
             }
         }
         
@@ -989,7 +1006,11 @@
             if (!audioPlayer) return;
             
             audioPlayer.addEventListener('canplaythrough', function() {
-                console.log('Audio ready to play');
+                // Jika ada pending play, jalankan
+                if (state.pendingPlay) {
+                    playAudio();
+                    state.pendingPlay = false;
+                }
             });
             
             audioPlayer.addEventListener('timeupdate', function() {
@@ -1011,7 +1032,6 @@
             });
             
             audioPlayer.addEventListener('ended', function() {
-                console.log('Audio ended');
                 if (state.mode === 'radio') return;
                 
                 if (state.repeat) {
@@ -1032,13 +1052,11 @@
             });
             
             audioPlayer.addEventListener('play', function() {
-                console.log('Audio playing');
                 state.isPlaying = true;
                 updateAnimations();
             });
             
             audioPlayer.addEventListener('pause', function() {
-                console.log('Audio paused');
                 state.isPlaying = false;
                 updateAnimations();
             });
@@ -1061,22 +1079,7 @@
             if (state.isPlaying) {
                 audioPlayer.pause();
             } else {
-                // Set source if needed
-                if (state.mode === 'radio') {
-                    if (audioPlayer.src !== RADIO_URL) {
-                        audioPlayer.src = RADIO_URL;
-                    }
-                } else if (!audioPlayer.src || audioPlayer.src === location.href) {
-                    prepareAudio();
-                }
-                
-                // Play with user gesture
-                const playPromise = audioPlayer.play();
-                if (playPromise !== undefined) {
-                    playPromise.catch(function(error) {
-                        console.log('Play prevented, waiting for user gesture');
-                    });
-                }
+                playAudio();
             }
         }
         
@@ -1089,12 +1092,10 @@
             updateUI();
             prepareAudio();
             
-            const audioPlayer = $('audioPlayer');
-            if (audioPlayer) {
-                audioPlayer.play().catch(function(e) {
-                    console.log('Play error:', e.message);
-                });
-            }
+            // Langsung play
+            setTimeout(function() {
+                playAudio();
+            }, 100);
         }
         
         function nextAyah() {
@@ -1106,17 +1107,11 @@
                 prepareAudio();
                 
                 if (state.isPlaying || state.autoPlay) {
-                    const audioPlayer = $('audioPlayer');
-                    if (audioPlayer) audioPlayer.play().catch(console.error);
+                    setTimeout(playAudio, 100);
                 }
             } else if (state.currentSurah.number < 114) {
-                const wasPlaying = state.isPlaying;
-                loadSurah(state.currentSurah.number + 1).then(function(success) {
-                    if (success && (wasPlaying || state.autoPlay)) {
-                        const audioPlayer = $('audioPlayer');
-                        if (audioPlayer) audioPlayer.play().catch(console.error);
-                    }
-                });
+                // FIXED: Load surah berikutnya dengan auto-play
+                loadSurah(state.currentSurah.number + 1, state.isPlaying || state.autoPlay);
             } else {
                 showToast('Akhir Al-Qur\'an', 'info');
                 state.isPlaying = false;
@@ -1133,19 +1128,18 @@
                 prepareAudio();
                 
                 if (state.isPlaying) {
-                    const audioPlayer = $('audioPlayer');
-                    if (audioPlayer) audioPlayer.play().catch(console.error);
+                    setTimeout(playAudio, 100);
                 }
             } else if (state.currentSurah.number > 1) {
+                // FIXED: Load surah sebelumnya dengan auto-play
                 const wasPlaying = state.isPlaying;
-                loadSurah(state.currentSurah.number - 1).then(function(success) {
+                loadSurah(state.currentSurah.number - 1, false).then(function(success) {
                     if (success) {
                         state.currentAyah = state.currentSurah.numberOfVerses;
                         updateUI();
                         prepareAudio();
                         if (wasPlaying) {
-                            const audioPlayer = $('audioPlayer');
-                            if (audioPlayer) audioPlayer.play().catch(console.error);
+                            setTimeout(playAudio, 100);
                         }
                     }
                 });
@@ -1222,9 +1216,6 @@
         function switchMode(mode) {
             if (state.mode === mode) return;
             
-            console.log('Switching mode to:', mode);
-            
-            // Stop audio first
             const audioPlayer = $('audioPlayer');
             if (audioPlayer) {
                 audioPlayer.pause();
@@ -1235,7 +1226,6 @@
             state.isPlaying = false;
             state.mode = mode;
             
-            // Update UI
             toggleClass('ayahModeBtn', 'active', mode === 'ayah');
             toggleClass('radioModeBtn', 'active', mode === 'radio');
             toggleClass('radioStatus', 'active', mode === 'radio');
@@ -1246,7 +1236,6 @@
             if (nextBtn) nextBtn.disabled = mode === 'radio';
             
             if (mode === 'radio') {
-                // Radio mode
                 setText('surahName', 'Suara Mekarindah');
                 setText('surahArabic', 'صوت ميكاريندا');
                 setHTML('ayahInfo', 'Radio Islami Live 24/7');
@@ -1258,12 +1247,11 @@
                 
                 showToast('Mode Radio Suara Mekarindah', 'info');
             } else {
-                // Murottal mode
                 if (state.currentSurah && state.ayahs.length > 0) {
                     updateUI();
                     prepareAudio();
                 } else {
-                    loadSurah(1);
+                    loadSurah(1, false);
                 }
                 showToast('Mode Murottal aktif', 'info');
             }
@@ -1378,9 +1366,11 @@
             renderSurahList();
         }
         
+        // FIXED: selectSurah dengan auto-play
         function selectSurah(num) {
             closeSurahModal();
             
+            // Switch ke mode murottal jika di radio
             if (state.mode === 'radio') {
                 state.mode = 'ayah';
                 toggleClass('ayahModeBtn', 'active', true);
@@ -1391,14 +1381,23 @@
                 const nextBtn = $('nextBtn');
                 if (prevBtn) prevBtn.disabled = false;
                 if (nextBtn) nextBtn.disabled = false;
+                
+                const audioPlayer = $('audioPlayer');
+                if (audioPlayer) {
+                    audioPlayer.pause();
+                    audioPlayer.src = '';
+                }
             }
             
-            loadSurah(num);
+            // FIXED: Load surah dengan auto-play = true
+            loadSurah(num, true);
         }
         
+        // FIXED: selectJuz dengan auto-play
         function selectJuz(juzNum) {
             closeSurahModal();
             
+            // Switch ke mode murottal jika di radio
             if (state.mode === 'radio') {
                 state.mode = 'ayah';
                 toggleClass('ayahModeBtn', 'active', true);
@@ -1409,16 +1408,24 @@
                 const nextBtn = $('nextBtn');
                 if (prevBtn) prevBtn.disabled = false;
                 if (nextBtn) nextBtn.disabled = false;
+                
+                const audioPlayer = $('audioPlayer');
+                if (audioPlayer) {
+                    audioPlayer.pause();
+                    audioPlayer.src = '';
+                }
             }
             
             const juz = JUZ_MAPPING.find(function(j) { return j.juz === juzNum; });
             if (!juz) return;
             
-            loadSurah(juz.start.surah).then(function(success) {
+            // FIXED: Load surah dengan auto-play
+            loadSurah(juz.start.surah, true).then(function(success) {
                 if (success) {
                     state.currentAyah = juz.start.ayah;
                     updateUI();
                     prepareAudio();
+                    setTimeout(playAudio, 100);
                     showToast('Juz ' + juzNum + ' dimuat', 'success');
                 }
             });
@@ -1495,4 +1502,8 @@
         });
     </script>
 </body>
+</html>
+    
+  </body>
+  
 </html>
